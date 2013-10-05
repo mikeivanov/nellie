@@ -13,4 +13,5 @@
   :license "LGPLv3"
   :depends-on (:iterate :drakma :flexi-streams :cl-ppcre :cl-json
                :getopt :iterate :simple-date-time :alexandria :osicat)
-  :components ((:file "alists")))
+  :components ((:file "alists")
+               (:file "hdfs")))
