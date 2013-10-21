@@ -4,6 +4,7 @@
   (:use :cl :alists :simple-date-time :iterate :alexandria)
   (:export #:+webfs-port+
            #:+webhdfs-port+
+           #:*default-port*
            #:*namenode-rpc-address*
            #:make-context
            #:create
@@ -22,14 +23,14 @@
 ; http://hadoop.apache.org/docs/r1.2.1/webhdfs.html
 
 (define-constant +webfs-port+ 14000)
-
 (define-constant +webhdfs-port+ 50075)
 
+(defparameter *default-port* +webfs-port+)
 (defparameter *namenode-rpc-address* "localhost:8020")
 
 (defstruct context
   (host "127.0.0.1")
-  (port +webfs-port+)
+  (port *default-port*)
   (user "hdfs"))
 
 (define-condition server-error (error)
