@@ -1,6 +1,6 @@
 (in-package :cl-user)
 (defpackage :nellie.util
-  (:alias :util)
+  (:nicknames :util)
   (:use :cl :iterate :alexandria)
   (:import-from :cl-ppcre :scan-to-strings)
   (:import-from :metabang-bind :bind)
