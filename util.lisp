@@ -17,9 +17,9 @@
            :terminate
            :getenv))
 
-(in-package :dipper.util)
+(in-package :nellie.util)
 
-(defun alist-get (key alist &key (test #'eql))
+(defun alist-get (alist key &key (test #'eql))
   (cdr (assoc key alist :test test)))
 
 (defun alist-get-str (alist key-string)

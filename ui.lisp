@@ -1,7 +1,7 @@
 (in-package :cl-user)
 (defpackage :nellie.ui
-  (:use :cl :iterate :alists :simple-date-time :alexandria)
-  (:export #:main))
+  (:use :cl :util :iterate :simple-date-time :alexandria)
+  (:export :main))
 
 (in-package :nellie.ui)
 
