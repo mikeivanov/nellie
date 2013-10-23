@@ -121,7 +121,7 @@
                           (:message . response))))
          (name (alist-get exception :exception))
          (type (if name
-                   (make-keyword (cl-json::simplified-camel-case-to-lisp name))
+                   (string-to-keyword (cl-json::simplified-camel-case-to-lisp name))
                    :server-error))
          (message (or (alist-get exception :message)
                       reason-phrase
@@ -266,7 +266,7 @@
                 (alist-merge `(,status
                                ((:modification-time . ,(from-hadoop-time mtime))
                                 (:access-time . ,(from-hadoop-time atime))
-                                (:type . ,(make-keyword type))))))))))
+                                (:type . ,(string-to-keyword type))))))))))
 
 (defun get-file-status (context path)
   (let ((response (send-operation-request context :get "GETFILESTATUS" path)))
