@@ -59,7 +59,7 @@
 
 (defun add-url-parameters (url parameters-alist)
   (etypecase url
-    (string (url-merge-parameters (puri:parse-uri url) parameters-alist))
+    (string (add-url-parameters (puri:parse-uri url) parameters-alist))
     (puri:uri
      (let* ((query-string (puri:uri-query url))
             (query-params (drakma::dissect-query query-string))
