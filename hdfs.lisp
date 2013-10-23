@@ -19,8 +19,9 @@
            #:delete-file-or-dir
            #:from-hadoop-time
            #:server-error
-           #:server-error-code
-           #:server-error-message))
+           #:error-type
+           #:error-code
+           #:error-message))
 
 (in-package :nellie.hdfs)
 

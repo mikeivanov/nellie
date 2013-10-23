@@ -5,6 +5,8 @@
 
 (in-package :nellie.ui)
 
+(cl-interpol:enable-interpol-syntax)
+
 (define-condition ui-error (error)
   ((message :initarg :message :reader ui-error-message)))
 
@@ -23,31 +25,31 @@
 (defun cmd-ls (context path)
   (let* ((lst (hdfs:list-status context path)))
     (dolist (e lst)
-      (format t "~A~T~A~T~A~T~D~T~A~T~A~%"
-              (alist-get :permission e)
-              (alist-get :owner e)
-              (alist-get :group e)
-              (alist-get :length e)
-              (format-date-time (alist-get :modification-time e))
+      (format t #?"~A\t~A\t~A\t~D\t~A\t~A~%"
+              (alist-get e :permission)
+              (alist-get e :owner)
+              (alist-get e :group)
+              (alist-get e :length)
+              (format-date-time (alist-get e :modification-time))
               (concatenate 'string
-                           (alist-get :path-suffix e)
-                           (if (eq (alist-get :type e) :directory) "/" ""))))))
+                           (alist-get e :path-suffix)
+                           (if (eq (alist-get e :type) :directory) "/" ""))))))
 
 (defun cmd-fstat (context path)
   (let* ((st (hdfs:get-file-status context path)))
     (format t "Path:        ~A~%" path)
-    (format t "Type:        ~A~%" (alist-get :type st))
-    (format t "Length:      ~D~%" (alist-get :length st))
-    (format t "Permission:  ~A~%" (alist-get :permission st))
-    (format t "Owner:       ~A~%" (alist-get :owner st))
-    (format t "Group:       ~A~%" (alist-get :group st))
+    (format t "Type:        ~A~%" (alist-get st :type))
+    (format t "Length:      ~D~%" (alist-get st :length))
+    (format t "Permission:  ~A~%" (alist-get st :permission))
+    (format t "Owner:       ~A~%" (alist-get st :owner))
+    (format t "Group:       ~A~%" (alist-get st :group))
     (format t "Mod. time:   ~A~%" (format-date-time (hdfs:from-hadoop-time
-                                                     (alist-get :modification-time st))))
+                                                     (alist-get st :modification-time))))
     (format t "Access time: ~A~%" (format-date-time (hdfs:from-hadoop-time
-                                                     (max (alist-get :access-time st)
-                                                          (alist-get :modification-time st)))))
-    (format t "Block size:  ~D~%" (alist-get :block-size st))
-    (format t "Replication: ~D~%" (alist-get :replication st))))
+                                                     (max (alist-get st :access-time)
+                                                          (alist-get st :modification-time)))))
+    (format t "Block size:  ~D~%" (alist-get st :block-size))
+    (format t "Replication: ~D~%" (alist-get st :replication))))
 
 (defun report-progress (total current data)
   (let* ((progress (ceiling (* 10 (/ current total))))
@@ -63,9 +65,10 @@
   (with-open-file (in filename :element-type 'flexi-streams:octet)
     (let ((len (file-length in)))
       (format t "Uploading '~A' " filename)
-      (hdfs:create context path in (file-length in)
-                          :callback (curry #'report-progress len)
-                          :overwrite t)
+      (hdfs:create context path in
+                   :content-length (file-length in)
+                   :progress-callback (curry #'report-progress len)
+                   :overwrite t)
       (format t "~%Done.~%"))))
 
 (defun cmd-mkdir (context path)
@@ -107,7 +110,7 @@
 
 (defun ui (&rest argv)
   (multiple-value-bind (command args options) (parse-options argv)
-    (let ((handler (alist-get-str command +commands+)))
+    (let ((handler (alist-get-str +commands+ command)))
       (if (null handler)
           (ui-error (format nil "Unrecognized command `~S`" command))
           (exec-command handler args options)))))
@@ -130,6 +133,6 @@
       (format t "nellie: ~A~%" (ui-error-message e))
       (usage))
     (hdfs:server-error (e)
-      (format t "nellie: ~A~%" (hdfs:server-error-message e)))
+      (format t "nellie: ~A~%" (hdfs:error-message e)))
     (error (e)
       (format t "nellie: unexpected error (~A~%)" e))))
