@@ -274,7 +274,7 @@
 
 (defun mkdirs (context path &key permission)
   (bind ((parameters `(("permission" . ,permission)))
-         (response (operation-request context :put "MKDIRS" path
+         (response (send-operation-request context :put "MKDIRS" path
                                       :parameters parameters)))
     (alist-get response :boolean)))
 
