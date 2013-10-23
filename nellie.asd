@@ -12,7 +12,9 @@
   :author "Mike Ivanov"
   :license "LGPLv3"
   :depends-on (:iterate :drakma :flexi-streams :cl-ppcre :cl-json
-               :getopt :iterate :simple-date-time :alexandria :cl-interpol)
-  :components ((:file "alists")
+               :getopt :iterate :simple-date-time :alexandria :cl-interpol
+               :metabang-bind)
+  :components ((:file "util")
                (:file "hdfs")
+               (:file "hcat")
                (:file "ui")))

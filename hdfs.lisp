@@ -1,7 +1,8 @@
 (in-package :cl-user)
 (defpackage :nellie.hdfs
-  (:nicknames #:hdfs)
-  (:use :cl :alists :simple-date-time :iterate :alexandria)
+  (:nicknames :hdfs)
+  (:use :cl :util :simple-date-time :iterate)
+  (:import-from :alexandria :define-constant)
   (:import-from :metabang-bind :bind)
   (:import-from :flexi-streams
                 :make-flexi-stream :octets-to-string
