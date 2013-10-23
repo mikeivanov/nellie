@@ -2,6 +2,10 @@
 (defpackage :nellie.hdfs
   (:nicknames #:hdfs)
   (:use :cl :alists :simple-date-time :iterate :alexandria)
+  (:import-from :metabang-bind :bind)
+  (:import-from :flexi-streams
+                :make-flexi-stream :octets-to-string
+                :with-output-to-sequence :octet)
   (:export #:+webfs-port+
            #:+webhdfs-port+
            #:*default-port*
@@ -34,16 +38,16 @@
   (user "hdfs"))
 
 (define-condition server-error (error)
-  ((type :initarg :type :reader server-error-type)
-   (code :initarg :code :reader server-error-code)
-   (message :initarg :message :reader server-error-message)))
+  ((type :initarg :type :reader error-type)
+   (code :initarg :code :reader error-code)
+   (message :initarg :message :reader error-message)))
 
 (defmethod print-object ((object server-error) stream)
   (print-unreadable-object (object stream :type t :identity t)
     (format stream "[~D ~A]: ~A"
-            (server-error-type object)
-            (server-error-code object)
-            (server-error-message object))))
+            (error-type object)
+            (error-code object)
+            (error-message object))))
 
 (defun server-error (type code message)
   (error 'server-error
@@ -51,49 +55,118 @@
          :code code
          :message message))
 
-(defun exception-to-keyword (exception)
-  (make-keyword (cl-json::simplified-camel-case-to-lisp exception)))
+(defun add-url-parameters (url parameters-alist)
+  (etypecase url
+    (string (url-merge-parameters (puri:parse-uri url) parameters-alist))
+    (puri:uri
+     (let* ((query-string (puri:uri-query url))
+            (query-params (drakma::dissect-query query-string))
+            (all-params (alist-merge (list query-params parameters-alist)
+                                     :test #'equal)))
+       (setf (puri:uri-query url)
+             (drakma::alist-to-url-encoded-string all-params
+                                                  drakma:*drakma-default-external-format*
+                                                  #'drakma:url-encode))
+       url))))
 
-(defun url-with-parameters (url parameters)
-  (let* ((uri (puri:parse-uri url))
-         (query-params (drakma::dissect-query (puri::uri-query uri)))
-         (all-params (append query-params parameters)))
-    (setf (puri:uri-query uri)
-          (drakma::alist-to-url-encoded-string all-params
-                                               drakma:*drakma-default-external-format*
-                                               #'drakma:url-encode))
-    uri))
+(defun copy-stream (out in &key (blocksize 4096) progress-callback)
+  (let ((buf (make-array blocksize :element-type (stream-element-type in))))
+    (iter (for size = (read-sequence buf in))
+          (while (plusp size))
+          (sum size into total)
+          (write-sequence buf out :end size)
+          (when progress-callback
+            (for data
+                 first nil
+                 then (funcall progress-callback total data))))))
+
+(defun slurp-stream (stream)
+  (with-output-to-sequence (out :element-type 'octet)
+    (copy-stream out stream)))
+
+(defun slurp-stream-as-string (stream)
+  (octets-to-string (slurp-stream stream)))
+
+(defun ignore-content (stream)
+  (declare (ignore stream))
+  nil)
+
+(defun decode-json (stream)
+  (let ((string (slurp-stream-as-string stream)))
+    (when (plusp (length string))
+      (json:decode-json-from-string string))))
+
+(defparameter *decoder-map* `(("application/json" . ,#'decode-json)
+                              ("text/plain" . ,#'slurp-stream-as-string)
+                              ("text/html" . ,#'slurp-stream-as-string)))
+
+(defun ignore-response (stream headers)
+  (declare (ignore stream headers))
+  nil)
+
+(defun decode-response (stream headers)
+  (let* ((content-type (drakma:header-value :content-type headers))
+         (decoder (or (alist-get-str *decoder-map* content-type)
+                      #'ignore-content)))
+    (funcall decoder stream)))
+
+(defun handle-error (response-stream headers status-code reason-phrase)
+  (let* ((response (decode-response response-stream headers))
+         (content-type (drakma:header-value :content-type headers))
+         (exception (if (equal content-type "application/json")
+                        (alist-get response :*remote-exception)
+                        `((:exception . nil)
+                          (:message . response))))
+         (name (alist-get exception :exception))
+         (type (if name
+                   (make-keyword (cl-json::simplified-camel-case-to-lisp name))
+                   :server-error))
+         (message (or (alist-get exception :message)
+                      reason-phrase
+                      "Unknown error")))
+    (error 'server-error
+           :type type
+           :code status-code
+           :message message)))
+
+(defun unexpected-redirect (location)
+  (error "Unexpected redirect to ~S" location))
 
 (defun send-request (method url
-                     &key parameters content (content-length t))
-  (let ((drakma:*header-stream* nil))
-    (multiple-value-bind (bytes code headers)
-        (drakma:http-request (url-with-parameters url parameters)
-                             :external-format-in :utf-8
-                             :external-format-out :utf-8
-                             :force-binary t
-                             :method method
-                             :redirect nil
-                             :content content
-                             :content-length content-length
-                             :content-type "application/octet-stream")
-      (let* ((content-type (alist-get :content-type headers))
-             (is-json (equal content-type "application/json"))
-             (body (cond (is-json
-                          (when bytes
-                            (json:decode-json-from-string (flexi-streams:octets-to-string bytes))))
-                         ((equal (subseq content-type 0 5) "text/")
-                          (flexi-streams:octets-to-string bytes))
-                         (t bytes))))
-        (cond ((< code 400) (values body code headers))
-              (is-json (let* ((exception (alist-get :*remote-exception body))
-                              (name (alist-get :exception exception))
-                              (type (if name (exception-to-keyword name) :unknown-error))
-                              (message (or (alist-get :message exception) "Unknown error")))
-                         (server-error type code message)))
-              (t (server-error :server-error code body)))))))
+                     &key
+                       parameters content (content-length t)
+                       response-handler redirect-handler)
+  (bind ((drakma:*header-stream* nil)
+         ((:values response-stream status headers
+                   _ _ must-close reason-phrase)
+          (drakma:http-request (add-url-parameters url parameters)
+                               :preserve-uri t
+                               :external-format-in :utf-8
+                               :external-format-out :utf-8
+                               :force-binary t
+                               :method method
+                               :redirect nil
+                               :content content
+                               :content-length content-length
+                               :content-type "application/octet-stream"
+                               :want-stream t))
+         (response-handler (or response-handler #'decode-response))
+         (redirect-handler (or redirect-handler #'unexpected-redirect)))
+    (unwind-protect
+         (cond ((<= 200 status 201) (funcall response-handler
+                                             response-stream headers))
+               ((= status 307) (funcall redirect-handler
+                                        (drakma:header-value :location headers)))
+               ((< status 400) (error "Unexpected status code ~S" status))
+               (t (handle-error response-stream
+                                headers status reason-phrase)))
+      (when must-close
+        (close response-stream)))))
 
-(defun operation-request (context method operation path &key parameters)
+(defun send-operation-request (context method operation path
+                               &key parameters
+                                 response-handler
+                                 redirect-handler)
   (let* ((user (context-user context))
          (path (if (eq (char path 0) #\/) path
                    (format nil "/users/~A/~A" user path)))
@@ -101,81 +174,111 @@
                       (context-host context)
                       (context-port context)
                       path))
-         (parameters (concatenate 'list
-                                  `(("user.name" . ,user)
-                                    ("op" . ,operation)
-                                    ("namenoderpcaddress" . ,*namenode-rpc-address*))
-                                  parameters)))
-    (send-request method url :parameters parameters)))
+         (op-parameters `(("user.name" . ,user)
+                          ("op" . ,operation)
+                          ("namenoderpcaddress" . ,*namenode-rpc-address*)))
+         (parameters (alist-merge (list parameters
+                                        op-parameters))))
+    (send-request method url
+                  :parameters parameters
+                  :response-handler response-handler
+                  :redirect-handler redirect-handler)))
+
+(defun open-file (context path output-stream
+                  &key offset length buffersize progress-callback)
+  (labels ((stream-response (response-stream headers)
+             (declare (ignore headers))
+             (copy-stream output-stream
+                          response-stream
+                          :progress-callback progress-callback)
+             t)
+           (location-redirect (location)
+             (send-request :get location
+                           :response-handler #'stream-response)))
+    (send-operation-request context :get "OPEN" path
+                            :parameters `(("offset" . ,offset)
+                                          ("length" . ,length)
+                                          ("buffersize" . ,buffersize))
+                            :response-handler #'stream-response
+                            :redirect-handler #'location-redirect)))
+
+(defun send-data-request (context method operation path
+                          content-stream content-length
+                          &key parameters progress-callback)
+  (unless (subtypep (stream-element-type content-stream) 'octet)
+    (error "Expected a binary content stream"))
+  (let ((length (or content-length
+                    (when (typep content-stream 'file-stream)
+                      (file-length content-stream))
+                    (error "Can't determine the content length")))
+        (wrapper (lambda (request-stream)
+                   (copy-stream request-stream
+                                content-stream
+                                :progress-callback progress-callback))))
+    (flet ((unexpected-response (response-stream headers)
+             (declare (ignore response-stream headers))
+             (error "Expected a redirect, got data."))
+           (upload-data (location)
+             (send-request method location
+                           :content wrapper
+                           :content-length length
+                           :response-handler #'ignore-response)))
+      (send-operation-request context method operation path
+                              :parameters parameters
+                              :response-handler #'unexpected-response
+                              :redirect-handler #'upload-data)))
+  t)
+
+(defun create (context path content-stream
+               &key
+                 overwrite blocksize replication permission buffersize
+                 content-length progress-callback)
+  (let ((parameters `(("overwrite" . ,(if overwrite "true" "false"))
+                      ("blocksize" . ,blocksize)
+                      ("replication" . ,replication)
+                      ("permission" . ,permission)
+                      ("buffersize" . ,buffersize))))
+    (send-data-request context :put "CREATE" path content-stream content-length
+                       :parameters parameters
+                       :progress-callback progress-callback)))
+
+(defun append-to (context path content-stream
+                  &key buffersize content-length progress-callback)
+  (bind ((parameters `(("buffersize" . ,buffersize))))
+    (send-data-request context :post "APPEND" path content-stream content-length
+                       :parameters parameters
+                       :progress-callback progress-callback)))
 
 (defun from-hadoop-time (hadoop-time)
   (let ((secs (floor (/ hadoop-time 1000.0))))
     (from-posix-time secs)))
 
-(defun send-content (content callback stream)
-  (unless (and (streamp content)
-               (input-stream-p content)
-               (open-stream-p content)
-               (subtypep (stream-element-type content) 'flexi-streams:octet))
-    (error "Expected a binary input stream"))
-  (iter (with buf = (make-array 8192 :element-type 'flexi-streams:octet))
-        (for num = (read-sequence buf content))
-        (sum num into pos)
-        (when callback (for dat first nil then (funcall callback pos dat)))
-        (if (zerop num)
-            (terminate)
-            (write-sequence buf stream :end num))))
-
-(defun create (context path content length
-               &key overwrite blocksize replication permission buffersize callback)
-  (let* ((parameters `(("overwrite" . ,(if overwrite "true" "false"))
-                       ("blocksize" . ,blocksize)
-                       ("replication" . ,replication)
-                       ("permission" . ,permission)
-                       ("buffersize" . ,buffersize)))
-         (headers1 (nth-value 2 (operation-request context :put "CREATE" path
-                                                   :parameters parameters)))
-         (location1 (alist-get :location headers1))
-         (headers2 (nth-value 2 (send-request :put location1
-                                              :content (curry #'send-content content callback)
-                                              :content-length length)))
-         (location2 (or (alist-get :location headers2) path)))
-    location2))
-
-(defun append-to (context path content length &key buffersize callback)
-  (let* ((parameters `(("buffersize" . ,buffersize)))
-         (headers1 (nth-value 2 (operation-request context :post "APPEND" path
-                                                   :parameters parameters)))
-         (location1 (alist-get :location headers1))
-         (headers2 (nth-value 2 (send-request :post location1
-                                              :content (curry #'send-content content callback)
-                                              :content-length length)))
-         (location2 (or (alist-get :location headers2) path)))
-    location2))
-
 (defun list-status (context path)
-  (let* ((res (operation-request context :get "LISTSTATUS" path))
-         (statuses (alist-get :*file-status (alist-get :*file-statuses res))))
+  (let* ((res (send-operation-request context :get "LISTSTATUS" path))
+         (statuses (alist-get (alist-get res :*file-statuses) :*file-status)))
     (iter (for status in statuses)
           (collect
-              (let ((mtime (alist-get :modification-time status))
-                    (atime (alist-get :access-time status))
-                    (type  (alist-get :type status)))
+              (let ((mtime (alist-get status :modification-time))
+                    (atime (alist-get status :access-time))
+                    (type  (alist-get status :type)))
                 (alist-merge `(,status
                                ((:modification-time . ,(from-hadoop-time mtime))
                                 (:access-time . ,(from-hadoop-time atime))
                                 (:type . ,(make-keyword type))))))))))
 
 (defun get-file-status (context path)
-  (let ((res (operation-request context :get "GETFILESTATUS" path)))
-    (alist-get :*file-status res)))
+  (let ((response (send-operation-request context :get "GETFILESTATUS" path)))
+    (alist-get response :*file-status)))
 
 (defun mkdirs (context path &key permission)
-  (let ((res (operation-request context :put "MKDIRS" path
-                                :parameters `(("permission" . ,permission)))))
-    (alist-get :boolean res)))
+  (bind ((parameters `(("permission" . ,permission)))
+         (response (operation-request context :put "MKDIRS" path
+                                      :parameters parameters)))
+    (alist-get response :boolean)))
 
 (defun delete-file-or-dir (context path &key recursive)
-  (let ((res (operation-request context :delete "DELETE" path
-                                :parameters `(("recursive" . ,(if recursive "true" "false"))))))
-    (alist-get :boolean res)))
+  (let* ((parameters `(("recursive" . ,(if recursive "true" "false"))))
+         (response (send-operation-request context :delete "DELETE" path
+                                           :parameters parameters
+                                           :response-handler #'ignore-response)))
+    (alist-get response :boolean)))
