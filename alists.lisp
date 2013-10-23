@@ -10,25 +10,26 @@
 
 (in-package :nellie.alists)
 
-(defun alist-get (key alist)
-  (cdr (assoc key alist)))
+(defun alist-get (alist key &key (test #'eql))
+  (cdr (assoc key alist :test test)))
 
-(defun alist-get-str (str-key alist)
-  (cdr (assoc str-key alist :test #'equal)))
+(defun alist-get-str (alist key-string)
+  (cdr (assoc key-string alist :test #'equal)))
 
-(defun alist-set (key value alist &key (test #'eql))
-  (let ((existing (assoc key alist :test test)))
-    (if existing
-        (rplacd existing value)
-        (rplacd (last alist) `((,key . ,value))))
-    alist))
+(defun alist-set (alist key value &key (test #'eql))
+  (if (null alist)
+      (list (cons key value))
+      (let ((existing (assoc key alist :test test)))
+        (if existing
+            (rplacd existing value)
+            (rplacd (last alist) (list (cons key value))))
+        alist)))
 
-(defun alist-update (al1 al2 &key (test #'eql))
-  (dolist (kv al2)
-    (alist-set (car kv) (cdr kv) al1 :test test))
-  al1)
+(defun alist-update (alist updates-alist &key (test #'eql))
+  (dolist (kv updates-alist)
+    (setf alist (alist-set alist (car kv) (cdr kv) :test test)))
+  alist)
 
 (defun alist-merge (alists &key (test #'eql))
-  (reduce (lambda (a b) (alist-update a b :test test))
-          (cdr alists)
-          :initial-value (copy-alist (car alists))))
+  (reduce (lambda (a b) (alist-update a b :test test)) alists))
+
