@@ -57,7 +57,7 @@
          (diff (- progress reported)))
     (if (plusp diff)
         (progn
-          (format t ".")
+          (format *error-output* ".")
           progress)
         reported)))
 
@@ -71,6 +71,19 @@
                    :overwrite t)
       (format t "~%Done.~%"))))
 
+(defun cmd-get (context path &optional output-path)
+  (with-open-stream (out (if output-path
+                             (open output-path
+                                   :element-type 'flexi-streams:octet
+                                   :direction :output
+                                   :if-exists :supersede
+                                   :if-does-not-exist :create)
+                             (make-synonym-stream '*standard-output*)))
+    (format *error-output* "Downloading '~A' " output-path)
+    (hdfs:open-file context path out
+                    :progress-callback #'report-progress)
+    (format *error-output* "~%Done.~%")))
+
 (defun cmd-mkdir (context path)
   (hdfs:mkdirs context path))
 
@@ -80,6 +93,7 @@
 (defparameter +commands+ '(("ls"     . cmd-ls)
                            ("status" . cmd-status)
                            ("put"    . cmd-put)
+                           ("get"    . cmd-get)
                            ("fstat"  . cmd-fstat)
                            ("mkdir"  . cmd-mkdir)
                            ("rm"     . cmd-rm)))

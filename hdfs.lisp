@@ -2,7 +2,7 @@
 (defpackage :nellie.hdfs
   (:nicknames :hdfs)
   (:use :cl :util :simple-date-time :iterate)
-  (:import-from :alexandria :define-constant)
+  (:import-from :alexandria :define-constant :curry)
   (:import-from :metabang-bind :bind)
   (:import-from :flexi-streams
                 :make-flexi-stream :octets-to-string
@@ -14,6 +14,7 @@
            #:make-context
            #:create
            #:append-to
+           #:open-file
            #:mkdirs
            #:list-status
            #:get-file-status
@@ -189,11 +190,12 @@
 (defun open-file (context path output-stream
                   &key offset length buffersize progress-callback)
   (labels ((stream-response (response-stream headers)
-             (declare (ignore headers))
-             (copy-stream output-stream
-                          response-stream
-                          :progress-callback progress-callback)
-             t)
+             (let* ((length (drakma:header-value :length headers))
+                    (callback (curry progress-callback length)))
+               (copy-stream output-stream
+                            response-stream
+                            :progress-callback callback)
+               t))
            (location-redirect (location)
              (send-request :get location
                            :response-handler #'stream-response)))
