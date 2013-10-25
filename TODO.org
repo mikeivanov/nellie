@@ -1,0 +1,4 @@
+* TODO
+- [ ] add `create table`
+- [ ] switch to unix-options, rework the args handling parts
+- [ ] add a `timestamp` command
