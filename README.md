@@ -30,5 +30,4 @@ Currently, Nellie is more like a proof of concept than a real thing.
 
 ## License
 
-LGPLv3
-
+This software is covered by the [MIT](./LICENSE) license.
