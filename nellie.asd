@@ -16,5 +16,4 @@
                :metabang-bind)
   :components ((:file "util")
                (:file "hdfs")
-               (:file "hcat")
                (:file "ui")))
